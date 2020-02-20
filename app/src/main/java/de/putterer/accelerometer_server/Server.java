@@ -11,7 +11,7 @@ import java.util.Optional;
 
 public class Server {
 
-	public static final int SERVER_PORT = 9379;
+	public static final int SERVER_PORT = 9380;
 	public static final int MAX_MESSAGE_LENGTH = 65507;
 
 	public static final byte TYPE_SUBSCRIBE = 10;
@@ -22,6 +22,8 @@ public class Server {
 
 	private static DatagramSocket socket;
 	private static List<Subscription> subscriptions = new ArrayList<>();
+
+	private static volatile int nextMessageId = 0;
 
 	public static void init() {
 		try {
@@ -37,17 +39,21 @@ public class Server {
 
 	public static void onAcceleration(float[] acceleration) {
 		//TODO: only do at limited interval, not full rate? (full rate for game should be 20 ms)
-		ByteBuffer buffer = ByteBuffer.allocate(1 + 4 * 3);
+		ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 8 + 4 * 3);
 		buffer.put(TYPE_ACCELERATION_INFO);
+		buffer.putInt(nextMessageId++);
+		buffer.putLong(System.currentTimeMillis());
 		buffer.putFloat(acceleration[0]);
 		buffer.putFloat(acceleration[1]);
 		buffer.putFloat(acceleration[2]);
 
 		byte[] data = buffer.array();
 
-		subscriptions.forEach(subscription ->
-				sendMessage(subscription.getAddress(), subscription.getPort(), data)
-		);
+		synchronized (subscriptions) {
+			subscriptions.forEach(subscription ->
+					sendMessage(subscription.getAddress(), subscription.getPort(), data)
+			);
+		}
 	}
 
 	private static void onMessage(DatagramPacket packet) {
@@ -58,22 +64,27 @@ public class Server {
 		switch (packet.getData()[0]) {
 			case TYPE_SUBSCRIBE:
 				Subscription subscription = new Subscription(packet.getAddress().getHostAddress(), packet.getPort());
-				subscriptions.add(subscription);
+				synchronized (subscriptions) {
+					subscriptions.removeIf(s -> s.getAddress().equals(packet.getAddress().getHostAddress()) && s.getPort() == packet.getPort());
+					subscriptions.add(subscription);
+				}
 				sendMessage(subscription.getAddress(), subscription.getPort(), new byte[] {TYPE_CONFIRM_SUBSCRIPTION});
 				System.out.println("Got subscription from " + subscription.getAddress());
 				break;
 			case TYPE_UNSUBSCRIBE:
-				Optional<Subscription> unsubscription = subscriptions.stream().filter(s ->
-						s.getAddress().equals(packet.getAddress().getHostAddress())
-						&& s.getPort() == packet.getPort())
-						.findFirst();
+				synchronized (subscriptions) {
+					Optional<Subscription> unsubscription = subscriptions.stream().filter(s ->
+							s.getAddress().equals(packet.getAddress().getHostAddress())
+									&& s.getPort() == packet.getPort())
+							.findFirst();
 
-				if(! unsubscription.isPresent()) {
-					System.err.println("Couldn't find subscription to remove for " + packet.getAddress().getHostAddress());
-				} else {
-					subscriptions.remove(unsubscription.get());
-					sendMessage(unsubscription.get().getAddress(), unsubscription.get().getPort(), new byte[] {TYPE_CONFIRM_UNSUBSCRIPTION});
-					System.out.println("Got UNsubscription from " + unsubscription.get().getAddress());
+					if(! unsubscription.isPresent()) {
+						System.err.println("Couldn't find subscription to remove for " + packet.getAddress().getHostAddress());
+					} else {
+						subscriptions.remove(unsubscription.get());
+						sendMessage(unsubscription.get().getAddress(), unsubscription.get().getPort(), new byte[] {TYPE_CONFIRM_UNSUBSCRIPTION});
+						System.out.println("Got UNsubscription from " + unsubscription.get().getAddress());
+					}
 				}
 				break;
 			default:
