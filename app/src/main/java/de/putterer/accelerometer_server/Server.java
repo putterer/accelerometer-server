@@ -68,7 +68,12 @@ public class Server {
 					subscriptions.removeIf(s -> s.getAddress().equals(packet.getAddress().getHostAddress()) && s.getPort() == packet.getPort());
 					subscriptions.add(subscription);
 				}
-				sendMessage(subscription.getAddress(), subscription.getPort(), new byte[] {TYPE_CONFIRM_SUBSCRIPTION});
+				ByteBuffer buffer = ByteBuffer.allocate(1 + 4 * 3);
+				buffer.put(TYPE_CONFIRM_SUBSCRIPTION);
+				buffer.putFloat(MainActivity.calibration[0]);
+				buffer.putFloat(MainActivity.calibration[1]);
+				buffer.putFloat(MainActivity.calibration[2]);
+				sendMessage(subscription.getAddress(), subscription.getPort(), buffer.array());
 				System.out.println("Got subscription from " + subscription.getAddress());
 				break;
 			case TYPE_UNSUBSCRIBE:
